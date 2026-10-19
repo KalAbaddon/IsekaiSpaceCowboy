@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Isekai Space Cowboy — selftest</title>
+  <style>
+    body { font-family: monospace; margin: 2rem; background: #0b0e14; color: #d8dee9; }
+    .pass { color: #7fd47f; }
+    .fail { color: #ff7b72; }
+    #summary { margin-top: 1rem; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>selftest</h1>
+  <div id="results"></div>
+  <div id="summary"></div>
+  <script>
+    // Tiny test runner used by every build step (03-STEPS.md).
+    // Usage: test("name", () => { ...throw on failure... });
+    "use strict";
+    const results = document.getElementById("results");
+    const summary = document.getElementById("summary");
+    let passed = 0;
+    let failed = 0;
+
+    /** Register and run one test synchronously; prints a PASS/FAIL line. */
+    function test(name, fn) {
+      const line = document.createElement("div");
+      try {
+        fn();
+        passed += 1;
+        line.className = "pass";
+        line.textContent = "PASS " + name;
+      } catch (err) {
+        failed += 1;
+        line.className = "fail";
+        line.textContent = "FAIL " + name + " — " + err;
+      }
+      results.appendChild(line);
+    }
+
+    // Tests are appended by later steps (1.2 onward). Step 1.1: zero tests.
+
+    summary.textContent =
+      passed + failed === 0 ? "0 tests" : passed + " passed, " + failed + " failed";
+  </script>
+</body>
+</html>
