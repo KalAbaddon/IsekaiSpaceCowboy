@@ -25,6 +25,7 @@
     const summary = document.getElementById("summary");
     let passed = 0;
     let failed = 0;
+    let started = false; // set by the module script via start()
     let finished = false;
 
     /** Register and run one test synchronously; prints a PASS/FAIL line. */
@@ -43,19 +44,38 @@
       results.appendChild(line);
     }
 
-    /** Print the summary; called by the module script after registering tests. */
+    /** Like test(), but awaits a promise-returning test body (Step 1.3 onward). */
+    async function testAsync(name, fn) {
+      const line = document.createElement("div");
+      try {
+        await fn();
+        passed += 1;
+        line.className = "pass";
+        line.textContent = "PASS " + name;
+      } catch (err) {
+        failed += 1;
+        line.className = "fail";
+        line.textContent = "FAIL " + name + " — " + err;
+      }
+      results.appendChild(line);
+    }
+
+    /** Mark that the module script loaded and its tests are underway. */
+    function start() { started = true; }
+
+    /** Print the summary; called by the module script after all tests ran. */
     function finish() {
       finished = true;
       summary.textContent =
         passed + failed === 0 ? "0 tests" : passed + " passed, " + failed + " failed";
     }
-    window.finish = finish;
 
-    // Module scripts run before DOMContentLoaded. If they never ran (e.g. this
-    // file was opened via file://, where ES-module imports are blocked), say so
-    // instead of showing a blank page.
+    // Module scripts run before DOMContentLoaded. If they never started (e.g.
+    // this file was opened via file://, where ES-module imports are blocked),
+    // say so instead of showing a blank page. Async tests may still be running
+    // at this point, so only the un-started case counts as a load failure.
     window.addEventListener("DOMContentLoaded", () => {
-      if (!finished) {
+      if (!started) {
         const line = document.createElement("div");
         line.className = "fail";
         line.textContent =
@@ -65,12 +85,15 @@
         results.appendChild(line);
         summary.textContent = "0 passed, 1 failed";
         finished = true;
+      } else if (!finished) {
+        summary.textContent = "tests still running…";
       }
     });
   </script>
   <script type="module">
     // Tests for each step import the modules under test from ../js/ — works
-    // when the folder is served over http (03-STEPS.md). Step 1.2: bus + config.
+    // when the folder is served over http (03-STEPS.md). Step 1.2: bus +
+    // config. Step 1.3: HTTP wrapper.
     import { createBus } from "../js/core/events.js";
     import {
       SETTINGS_KEY,
@@ -81,6 +104,9 @@
       saveSettings,
       effectiveUserName,
     } from "../js/config.js";
+    import { request } from "../js/adapters/http.js";
+
+    start();
 
     /** Assert `cond`; throw with `msg` when falsy. */
     function assert(cond, msg) {
@@ -222,6 +248,61 @@
       assertEqual(effectiveUserName({ userName: "   " }), "Captain", "whitespace only");
       assertEqual(effectiveUserName({}), "Captain", "missing field");
       assertEqual(effectiveUserName({ userName: "Rex" }), "Rex", "real name kept");
+    });
+
+    // ---- Step 1.3 checks: HTTP wrapper (js/adapters/http.js) ----
+    // These talk to the very server this page is served from, plus one closed
+    // port and one guaranteed-silent test address; no external website needed.
+    const CSS_URL = new URL("../css/app.css", window.location.href).href;
+
+    /** Await `fn`, expecting request() to reject with the given error kind. */
+    async function expectKind(kind, fn) {
+      let err = null;
+      try {
+        await fn();
+      } catch (e) {
+        err = e;
+      }
+      if (!err) throw new Error("expected a " + kind + " error, but the request succeeded");
+      if (err.kind !== kind) {
+        throw new Error("expected kind " + kind + ", got " + JSON.stringify(err.kind) + " (" + err.message + ")");
+      }
+      return err;
+    }
+
+    await testAsync("http: closed port yields network", () =>
+      expectKind("network", () => request("http://127.0.0.1:9/", { timeoutS: 5 }))
+    );
+
+    await testAsync("http: slow target past its deadline yields timeout", () =>
+      // TEST-NET-3 (RFC 5737) is never answerable from the public internet, so
+      // the request hangs and the 0.1 s deadline must cut it off as timeout.
+      expectKind("timeout", () => request("http://203.0.113.123/", { timeoutS: 0.1 }))
+    );
+
+    await testAsync("http: non-2xx yields http + numeric status", async () => {
+      // python's http.server answers POST with 501; any non-2xx proves the path.
+      const err = await expectKind("http", () => request(CSS_URL, { method: "POST", timeoutS: 10 }));
+      if (!(typeof err.status === "number" && err.status >= 400)) {
+        throw new Error("expected a numeric error status >= 400, got " + JSON.stringify(err.status));
+      }
+    });
+
+    await testAsync("http: expect blob returns a Blob", async () => {
+      const blob = await request(CSS_URL, { expect: "blob", timeoutS: 10 });
+      if (!(blob instanceof Blob)) {
+        throw new Error("expected a Blob, got " + Object.prototype.toString.call(blob));
+      }
+      if (blob.size === 0) throw new Error("blob is empty");
+    });
+
+    await testAsync("http: JSON parse failure is caught, not raw", async () => {
+      // This page is HTML — asking for it as JSON must produce a typed error,
+      // never a raw SyntaxError leaking out of the wrapper.
+      const err = await expectKind("network", () => request(window.location.href, { timeoutS: 10 }));
+      if (!/unreadable response/.test(err.message)) {
+        throw new Error("expected the 'unreadable response' message, got: " + err.message);
+      }
     });
 
     finish();
