@@ -17,6 +17,10 @@
 
 If any SELF-CHECK fails, fix it before reporting. If you cannot fix it, report the failure and stop.
 
+**Live tests are run by the user only** (01-OVERVIEW: the user is the only test client — one GPU
+server, model loads must not be disturbed). Agent-side checks use fake timers and local data
+only. Where a real endpoint matters, ship a ready-made button and exact USER-CHECK steps instead.
+
 **Serving the page for every test:** from the `isekai-space-cowboy/` folder, run:
 ```
 python3 -m http.server 8000
@@ -63,40 +67,32 @@ User-check: selftests PASS.
 
 ### 1.4 Text adapter
 Files: `js/adapters/text.js`, `tests/selftest.html`.
-Do: implement �4.1, including vision content. Display only the `content` field of the response; reasoning arrives in a separate field and is ignored. No parsing or filtering of reply text.
+Do: implement �4.1, including vision content. Display only the `content` field of the response; reasoning arrives in a separate field and is ignored. No parsing or filtering of reply text.
 Checks:
 - [ ] Unit test: a response with both `content` and a reasoning field displays only `content`.
-- [ ] The request body shape matches �4.1 exactly. Print it in the report.
+- [ ] The request body shape matches �4.1 exactly. Print it in the report.
 User-check: the selftest has a "live text" button using saved settings. Point it at your real endpoint; the reply appears.
 
-### 1.5 Light-delay clock
-Files: `js/core/delay.js`, `tests/selftest.html`.
-Do: `track(promise, floorS)` emits `held`, `degraded`, `delivered` or `lost` per 01-OVERVIEW. Delivery time = max(floor, actual). At floor 0 skip the floor logic: deliver on settle (rejects → `lost`), no `held`/`degraded`. `delay.js` is reason-agnostic: it deals in state names only — no user-facing strings (all flavor lives in `ui/status.js`, Step 1.8), because these states will later stand for different situations (see 02-SPECS §3, event-driven floors).
-Checks:
-- [ ] Floor 0 (default `ftl`): resolves as soon as the fake job settles; no `held`/`degraded` emitted.
-- [ ] Fake 1 s job with a 3 s floor → delivered at ~3 s.
-- [ ] Fake 5 s job with a 3 s floor → `degraded` at 3 s, `delivered` at ~5 s.
-- [ ] Rejected job → `lost` carrying the error.
-- [ ] `delay.js` contains no user-facing strings (grep proof).
-User-check: selftests PASS, with timings printed.
+### 1.5 Light-delay clock — REMOVED (BACKBURNER demotion, user decision 2026-10-19)
+No delay machinery is built and none is discussed. The tiny `delay.js` passthrough lives in Step 1.8. Do not resurrect floors/`held`/`degraded` unless the user asks.
 
 ### 1.6 Cards (CCv3 — rewritten 2026-10-19 to match 02-SPECS §6)
 Files: `js/cards/png.js`, `js/cards/card.js`, `assets/cards/example.charx`, `tests/selftest.html`.
-Do: implement §6 — CHARX import/export (hand-rolled zip inside `card.js`:
-`DecompressionStream("deflate-raw")` reads, stored entries write), PNG tEXt
+Do: implement §6 — CHARX import (hand-rolled zip inside `card.js`:
+`DecompressionStream("deflate-raw")` reads), PNG tEXt
 chunk reader (`ccv3` → `chara` fallback, `zTXt` inflate, clear `iTXt` error,
 read-only `chara-ext-asset_*`), plain JSON import, V2 backfill per spec
 (`creator_notes` warning + decorator strip), asset model (icon `main` picking,
 `ccdefault:`, `embeded://`, `https:`, `data:`, `x_voice`/`x_transmission`/
-`x_ambient`), lorebook parse-and-keep. Export = CHARX only; sets
-`modification_date`; unknown fields/assets untouched. `assets/cards/
+`x_ambient`), lorebook parse-and-keep. Import-only — no export path, no
+`modification_date` (§6). `assets/cards/`
 example.charx` is an original character (cheerful mission-control tech) built
 with Python's `zipfile` from a `card.json` + tiny real assets (icon PNG named
 `main`, one `x_ambient` sample), extension fields filled.
 Asset extraction into IndexedDB happens in Step 1.7 (until then assets stay in
 memory for the session).
 Checks:
-- [ ] Round trip: CHARX import → export → import deep-equals (unknown fields and unknown assets preserved; `modification_date` excepted).
+- [ ] Imported cards keep unknown fields and unknown assets untouched in the stored card JSON (selftest prints them; no export exists to round-trip through).
 - [ ] A V2-only card parses: backfill warning in `creator_notes`, decorators stripped from entry content.
 - [ ] A V3 PNG card and plain V3 JSON both import; `ccv3` wins over `chara`.
 - [ ] Icon rule: several icons ⇒ the one named `main` is the avatar.
@@ -110,25 +106,25 @@ Checks:
 User-check: reload the selftest; the persisted test passes.
 
 ### 1.8 Chat core + Terminal mode
-Files: `js/core/chat.js`, `js/core/modes.js`, `js/ui/panel.js`, `js/ui/status.js`, `js/ui/cardpicker.js`, `js/main.js`, `css/app.css`.
-Do: prompt assembly per §7. Terminal mode: send → delay.track → show the reply. The status strip shows the distance; at `ftl` (default) a "thinking…" state while the backend works; with a nonzero floor a countdown ("signal ETA ≥ 3 s") then a "signal degraded" state. First open shows `first_mes`. Disable send while a reply is pending — implemented as one gate function ("may we send right now?") consulted by the send path, so future locks plug in without touching chat logic. On load, re-mark stored `held`/`degraded` messages `lost` ("connection dropped").
+Files: `js/core/chat.js`, `js/core/delay.js`, `js/core/modes.js`, `js/ui/panel.js`, `js/ui/status.js`, `js/ui/cardpicker.js`, `js/main.js`, `css/app.css`.
+Do: prompt assembly per §7. Terminal mode: send → `delay.track(promise)` → show the reply. `js/core/delay.js` is created here as a passthrough ONLY: resolves → `delivered`, rejects → `lost`; no floors, no timers, no other states — BACKBURNER, do not grow it without the user. The status strip shows the distance label and a "thinking…" state while the backend works. First open shows `first_mes`. Disable send while a reply is pending — implemented as one gate function ("may we send right now?") consulted by the send path, so future locks plug in without touching chat logic. On load, re-mark stored `held`/`degraded` messages `lost` ("connection dropped").
 Checks:
-- [ ] Held replies are not visible before the floor (set `inner` to test).
+- [ ] `delay.js` has no timers and no user-facing strings (grep proof).
+- [ ] Only `content` is displayed — model reasoning never appears.
 - [ ] A reply left pending across a reload shows as `lost ("connection dropped")`.
 - [ ] The chat persists across reload.
-- [ ] Thinking never appears.
-User-check: pick the example card, chat 5 turns at `ftl` and at `mars`, and confirm the delays feel right.
+User-check: pick the example card, chat 5 turns at the FTL default; each reply lands the moment the backend answers.
 
 ### 1.9 Settings UI
 Files: `js/ui/settings.js`, `js/main.js`, `css/app.css`.
-Do: form for every §2 field, a "Test" button per backend (text: 1-word ping; others: their smallest call), and the plain-text-key warning.
+Do: form for every §2 field, a "Test" button per backend (text: 1-word ping; others: their smallest call), and the plain-text-key warning. The USER presses every Test button — the user is the only test client.
 Checks:
 - [ ] Failed tests show the error kind and message. A CORS-looking failure shows a hint pointing at the README.
 User-check: each Test button gives a clear pass/fail against your real backends.
 
 ### 1.10 Pictures in Terminal
 Files: `js/adapters/image.js`, `js/core/modes.js`, `js/ui/panel.js`.
-Do: attach images to send (only if `text.vision`; otherwise the attach button is hidden with a tooltip). Add a "/pic <description>" command that generates an image via §4.2 and delivers it under the light-delay rules.
+Do: attach images to send (only if `text.vision`; otherwise the attach button is hidden with a tooltip). Add a "/pic <description>" command that generates an image via §4.2 and delivers it as `delivered`/`lost` like any reply.
 Checks:
 - [ ] Images are stored as media blobs, not data URLs in messages.
 User-check: send a photo; the model comments on it. `/pic` returns an image after the delay.
@@ -146,7 +142,7 @@ Do: the §5 pipeline exactly, including the JSON retry and fallback, polling, MP
 Checks:
 - [ ] The poll loop stops on completed, failed, and timeout. No runaway timers (show how).
 - [ ] The multipart field names match §4.4.
-User-check: say hello at `belt`; a clip of the character arrives, with sound.
+User-check: enable the video slot in Settings; say hello; a clip of the character arrives, with sound.
 
 ### 1.13 Phase 1 wrap-up
 Files: `README.md` only.

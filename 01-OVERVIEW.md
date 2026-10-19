@@ -3,9 +3,19 @@
 Name: **Isekai Space Cowboy** (final, set 2026-10-19; formerly worked under the temporary name — all identifiers are `isekai-space-cowboy` in files/keys and `isekai_space_cowboy` in JS identifiers and card extensions).
 Ancestor concept kept for history and Phase 3 lineage: `00-OLD-COWBOY-CONCEPT.md`.
 
+## Importance & assumptions — set by the user only (read before everything else)
+
+- **Never assume.** If anything is ambiguous, missing or merely "sounds likely", stop and ask the user ONE short question with options — then continue working on other parts. Never state an unconfirmed fact (whether some backend endpoint exists, whether some chunk or field appears, anything) as fact: mark it UNVERIFIED and let the step that needs it verify.
+- **The user is the only test client.** All the models share one server; the agent NEVER sends requests to the user's backends — no curl, no fetch, no browser automation — a stray request can collide with model loading. Agent testing ceiling: selftests with fake timers/local data, plus ready-made live-test buttons and exact USER-CHECK steps. Results the user reports back are recorded as dated observations and become spec facts only when the user says so.
+- **Only the user sets importance** — never inferred from how much space a topic takes up in these docs. Items marked **BACKBURNER**: do not build, do not discuss, do not design around — only do not block.
+- The differentiators of this app are its media modes — text + pictures/vision + voice (TTS) + video calls. ALL are core; never suggest dropping them. A chat-only client is not the point of this project.
+- Backend easy mode (current, not locked in): all four slots point at the user's local Unsloth Studio. Studio will provide all four capabilities in some form (user-confirmed) — the exact endpoints and payload shapes it exposes are **UNVERIFIED** and get discovered per step by the user's live test. Never bake Studio specifics into code: the app speaks only generic OpenAI-compatible shapes with user-supplied URLs and keys.
+- User priority notes (only lines the user dictated; nothing may be added here otherwise):
+  - **BACKBURNER: FTL / light-delay machinery** (see "The wait system").
+
 ## What this is
 
-A browser-only chat front end for any OpenAI-compatible LLM endpoint, with SillyTavern-style character cards. It is themed as a lonely ship far from Earth: replies can be made to arrive after a **delay** (FTL by default — see "The wait system"; the delay knob is the future game lever).
+A browser-only chat front end for any OpenAI-compatible LLM endpoint, with SillyTavern-style character cards. It is themed as a lonely ship far from Earth: replies arrive the moment the backend finishes (FTL is today's reality; the delay idea is **BACKBURNER** — see "The wait system").
 
 Three ways to talk to a character:
 
@@ -17,7 +27,7 @@ Three ways to talk to a character:
 
 ## Phases (only build the phase you are told to build)
 
-- **Phase 1 — Flat chat.** Plain HTML page. Card loader, chat log, the three modes as buttons, settings for endpoints, the light-delay system. Ugly is fine. Must work end to end.
+- **Phase 1 — Flat chat.** Plain HTML page. Card loader, chat log, the three modes as buttons, settings for endpoints. Replies land as soon as the backend finishes (FTL). Ugly is fine. Must work end to end.
 - **Phase 2 — Ship walkaround.** Three.js low-poly ship interior. Walk up to a prop → camera zooms → the Phase 1 chat UI opens in that mode. The 3D scene is a *skin*: it only opens modes. No chat logic moves into 3D code.
 - **Phase 3 — Game.** NOT in scope for this handoff. Outline only (see bottom). Will get its own handoff.
 
@@ -41,9 +51,9 @@ Three ways to talk to a character:
 ```
 Browser (static files)
  ├─ ui/        DOM chat panel, settings, card picker
- ├─ core/      chat state, light-delay clock, mode logic
+ ├─ core/      chat state, reply states, mode logic
  ├─ adapters/  one file per backend type (text, image, tts, video)
- ├─ cards/     character card import/export
+ ├─ cards/     character card import
  ├─ store/     IndexedDB persistence
  └─ scene/     Three.js ship (Phase 2 only)
         │
@@ -61,37 +71,27 @@ The user runs and wires their own backends. The app only speaks these documented
 **Reference backend — revision 2 (2026-10-19, user decision).** ALL four backend
 slots (text, image, TTS, video) point at the user's **Unsloth Studio on
 `http://192.168.42.52:<port>`** (port filled in via Settings; the agent never
-needs it). The user states Studio can serve everything we need; where a media
-endpoint is missing today, the fix/shim happens when its step lands — do not
-substitute other backends without being told. Rules: **(a) the coding agent
-NEVER sends any request to that server — all live testing is done by the user
-clicking in the app; (b) API keys are pasted by the user into the Settings panel
+needs it). Studio will provide all four capabilities in some form
+(user-confirmed); which endpoints and payload shapes it actually exposes is
+**UNVERIFIED** — each adapter's step discovers the real shape through the
+user's live test, and the spec is updated from that dated observation. Whether
+to shim in front of Studio or adjust the app is decided with the user at that
+point; do not substitute other backends without being told. Rules: **(a) the
+coding agent NEVER sends any request to that server — the user is the only
+test client; (b) API keys are pasted by the user into the Settings panel
 (Step 1.9) and live only in that browser — the agent never handles backend
-keys.** Text details from revision 1 still hold: OpenAI-compatible API, always
-`stream: false` (their Cloudflare `--secure` tunnel drops SSE — matches §4.1).
-Revision-1 history note, kept: at spec time (morning 2026-10-19) Studio's media
-endpoints were not confirmed; revision 2 supersedes that with "make it work
-per step, with the user's live app as the test vehicle".
+keys.** `stream: false` is an app decision (partial replies are never shown);
+the revision-1 claim that their Cloudflare `--secure` tunnel drops SSE streams
+is kept as an unverified user-reported observation. Revision-1 history note,
+kept: at spec time (morning 2026-10-19) Studio's media endpoints were not
+confirmed; revision 2 = "make it work per step, with the user's live app as
+the test vehicle".
 
-## The wait system: FTL by default, light delay as a dormant knob
+## The wait system — BACKBURNER (user demotion 2026-10-19)
 
-Decided 2026-10-19: for now the link is **FTL** — a reply appears the moment the backend
-finishes; the wait is simply "the person is thinking". Do NOT remove the mechanism, though:
-the distance knob is the intended future gameification lever, and the plumbing must be ready.
+Today's reality is FTL: a reply appears the moment the backend finishes; the wait is simply "the person is thinking". Do NOT build delay machinery (no floors, no `held`/`degraded` states, no countdowns) and do not discuss it — only do not block it. The non-blocking minimum stays as dormant data: the `distance` settings key, the preset table (02-SPECS §3) and the message `status` field (02-SPECS §8), so a later switch needs no rebuild.
 
-- Settings choose a **distance preset**; its floor (seconds) is the **minimum** time any reply
-  can take. Delivery time = the later of "floor elapsed since send" and "backend finished".
-- `ftl` (floor 0) is the default preset. At floor 0 the status strip just shows a "thinking…"
-  state and the floor logic is skipped — `held` and `degraded` never fire.
-- With a nonzero floor: early replies are **held** until the floor; if the backend runs past
-  the floor the UI shows in-world flavor ("signal degraded", static), not an error, until the
-  reply lands.
-- Model reasoning is never shown; only the `content` field is displayed.
-- Real failures (HTTP error, timeout) are shown honestly as "signal lost" plus the actual error
-  text in a small details line.
-- Radio delivery is **press-to-receive** at any distance: when the reply is ready the panel shows
-  an "INCOMING TRANSMISSION — press to receive" state; clicking it starts audio playback and
-  reveals the text. (Browsers block autoplay far from a user gesture; the click is also diegetic.)
+Not part of the backburner, stays regardless of distance: radio **press-to-receive** ("INCOMING TRANSMISSION — press to receive"; the click starts audio because browsers block autoplay far from a user gesture); model reasoning is never shown, only `content`; real failures show honestly as "signal lost" plus the actual error text in a small details line.
 
 ## Known gotcha: browser → local backend
 
