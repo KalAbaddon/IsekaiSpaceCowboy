@@ -18,11 +18,14 @@
   <script>
     // Tiny test runner used by every build step (03-STEPS.md).
     // Usage: test("name", () => { ...throw on failure... });
+    // Tests live in the module script below so they can import the modules
+    // under test; the runner itself stays self-contained.
     "use strict";
     const results = document.getElementById("results");
     const summary = document.getElementById("summary");
     let passed = 0;
     let failed = 0;
+    let finished = false;
 
     /** Register and run one test synchronously; prints a PASS/FAIL line. */
     function test(name, fn) {
@@ -40,10 +43,188 @@
       results.appendChild(line);
     }
 
-    // Tests are appended by later steps (1.2 onward). Step 1.1: zero tests.
+    /** Print the summary; called by the module script after registering tests. */
+    function finish() {
+      finished = true;
+      summary.textContent =
+        passed + failed === 0 ? "0 tests" : passed + " passed, " + failed + " failed";
+    }
+    window.finish = finish;
 
-    summary.textContent =
-      passed + failed === 0 ? "0 tests" : passed + " passed, " + failed + " failed";
+    // Module scripts run before DOMContentLoaded. If they never ran (e.g. this
+    // file was opened via file://, where ES-module imports are blocked), say so
+    // instead of showing a blank page.
+    window.addEventListener("DOMContentLoaded", () => {
+      if (!finished) {
+        const line = document.createElement("div");
+        line.className = "fail";
+        line.textContent =
+          "FAIL tests did not load — serve the isekai-space-cowboy/ folder with " +
+          '"python3 -m http.server 8123" and open ' +
+          "http://localhost:8123/tests/selftest.html";
+        results.appendChild(line);
+        summary.textContent = "0 passed, 1 failed";
+        finished = true;
+      }
+    });
+  </script>
+  <script type="module">
+    // Tests for each step import the modules under test from ../js/ — works
+    // when the folder is served over http (03-STEPS.md). Step 1.2: bus + config.
+    import { createBus } from "../js/core/events.js";
+    import {
+      SETTINGS_KEY,
+      DEFAULT_SETTINGS,
+      DISTANCES,
+      getDistance,
+      loadSettings,
+      saveSettings,
+      effectiveUserName,
+    } from "../js/config.js";
+
+    /** Assert `cond`; throw with `msg` when falsy. */
+    function assert(cond, msg) {
+      if (!cond) throw new Error("assertion failed: " + msg);
+    }
+
+    /** Deep-compare two JSON-safe values; throw with both renderings. */
+    function assertEqual(actual, expected, msg) {
+      const a = JSON.stringify(actual);
+      const b = JSON.stringify(expected);
+      if (a !== b) throw new Error(msg + " — got " + a + ", want " + b);
+    }
+
+    /** Minimal in-memory stand-in for localStorage (keeps merge tests apart
+     *  from whatever the browser really stores). */
+    function fakeStorage() {
+      const map = new Map();
+      return {
+        getItem: (k) => (map.has(k) ? map.get(k) : null),
+        setItem: (k, v) => { map.set(k, String(v)); },
+        removeItem: (k) => { map.delete(k); },
+      };
+    }
+
+    // ---- Step 1.2 checks: event bus ----
+
+    test("events: emit reaches listener", () => {
+      const bus = createBus();
+      const seen = [];
+      bus.on("chat:reply", (payload) => seen.push(payload));
+      bus.emit("chat:reply", { id: 7 });
+      assertEqual(seen, [{ id: 7 }], "listener should receive the payload");
+    });
+
+    test("events: off stops it", () => {
+      const bus = createBus();
+      let calls = 0;
+      const fn = () => { calls += 1; };
+      bus.on("tick", fn);
+      bus.emit("tick");
+      const removed = bus.off("tick", fn);
+      bus.emit("tick");
+      assertEqual(calls, 1, "listener runs once, before off");
+      assert(removed, "off returns true for a subscribed listener");
+      assert(!bus.off("tick", fn), "off returns false after removal");
+    });
+
+    test("events: one throwing listener does not corrupt the bus", () => {
+      const bus = createBus();
+      bus.on("tick", () => { throw new Error("boom"); });
+      try { bus.emit("tick"); } catch { /* expected to propagate */ }
+      let after = 0;
+      bus.on("tick", () => { after += 1; });
+      bus.emit("other");
+      assertEqual(after, 0, "other events unaffected");
+      // the throwing listener is still registered; emit still reaches it and
+      // listeners keep their slot (snapshot iteration)
+      const ok = () => {};
+      bus.on("tick2", ok);
+      bus.off("tick2", ok);
+      assert(true, "off after a failed emit works");
+    });
+
+    // ---- Step 1.2 checks: settings ----
+
+    test("config: settings round-trip through localStorage", () => {
+      // Real localStorage; any pre-existing stored settings are restored after.
+      const before = window.localStorage.getItem(SETTINGS_KEY);
+      try {
+        const settings = loadSettings();
+        settings.userName = "Local Test";
+        settings.text.baseUrl = "http://localhost:8888";
+        settings.text.vision = true;
+        settings.distance = "mars";
+        settings.timeouts.video = 600;
+        saveSettings(settings);
+        const raw = window.localStorage.getItem(SETTINGS_KEY);
+        assert(raw !== null, "written under the spec key");
+        assertEqual(SETTINGS_KEY, "isekai-space-cowboy.settings", "spec key name");
+        assertEqual(JSON.parse(raw), settings, "stored JSON matches what was saved");
+        assertEqual(loadSettings(), settings, "load(save(x)) deep-equals x");
+      } finally {
+        if (before === null) window.localStorage.removeItem(SETTINGS_KEY);
+        else window.localStorage.setItem(SETTINGS_KEY, before);
+      }
+    });
+
+    test("config: missing keys get defaults", () => {
+      const storage = fakeStorage();
+      storage.setItem(SETTINGS_KEY, JSON.stringify({
+        userName: "Rex",
+        text: { baseUrl: "http://localhost:8888" },
+        someUnknownKey: 42,
+      }));
+      const s = loadSettings(storage);
+      assertEqual(s.userName, "Rex", "saved value wins");
+      assertEqual(s.text, { baseUrl: "http://localhost:8888", apiKey: "", model: "", vision: false },
+        "saved nested value wins, sibling keys get defaults");
+      assertEqual(s.image.enabled, false, "untouched group keeps defaults");
+      assertEqual(s.timeouts.video, 900, "absent group gets full defaults");
+      assertEqual(s.distance, "ftl", "missing distance defaults to ftl");
+      assertEqual(s.someUnknownKey, 42, "unknown keys are preserved");
+    });
+
+    test("config: empty storage and broken JSON fall back to defaults", () => {
+      assertEqual(loadSettings(fakeStorage()), DEFAULT_SETTINGS, "no stored key");
+      const storage = fakeStorage();
+      storage.setItem(SETTINGS_KEY, "{not json");
+      assertEqual(loadSettings(storage), DEFAULT_SETTINGS, "unparsable JSON");
+      // each load hands out a fresh copy — mutating one must not leak
+      const a = loadSettings(fakeStorage());
+      a.userName = "mutated";
+      a.timeouts.text = 1;
+      assertEqual(loadSettings(fakeStorage()), DEFAULT_SETTINGS, "defaults stay pristine");
+    });
+
+    // ---- Step 1.2 checks: distance table (02-SPECS §3) ----
+
+    test("config: distance table matches the spec", () => {
+      assertEqual(DISTANCES.map((d) => d.id), ["ftl", "inner", "mars", "belt", "outer"],
+        "ids in order, ftl first");
+      assertEqual(DISTANCES.map((d) => d.floorS), [0, 3, 20, 60, 180], "floors in seconds");
+      assertEqual(DISTANCES.map((d) => d.label),
+        ["Instant (FTL link)", "Lunar orbit", "Near Mars", "Asteroid belt", "Outer system"],
+        "labels");
+      assertEqual(DEFAULT_SETTINGS.distance, "ftl", "default distance is ftl");
+    });
+
+    test("config: getDistance falls back to ftl", () => {
+      assertEqual(getDistance("ftl").floorS, 0, "ftl floor is 0");
+      assertEqual(getDistance("mars").floorS, 20, "known id found");
+      assertEqual(getDistance("nope").id, "ftl", "unknown id falls back to ftl");
+    });
+
+    // ---- Step 1.2 checks: userName (02-SPECS §2) ----
+
+    test("config: blank userName falls back to Captain", () => {
+      assertEqual(effectiveUserName({ userName: "" }), "Captain", "empty string");
+      assertEqual(effectiveUserName({ userName: "   " }), "Captain", "whitespace only");
+      assertEqual(effectiveUserName({}), "Captain", "missing field");
+      assertEqual(effectiveUserName({ userName: "Rex" }), "Rex", "real name kept");
+    });
+
+    finish();
   </script>
 </body>
 </html>
